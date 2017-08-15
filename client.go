@@ -51,11 +51,11 @@ func (c *Client) HandleChannelOpen(channelType string) <-chan NewChannel {
 }
 
 // NewClient creates a Client on top of the given connection.
-func NewClient(ctx context.Context, c Conn, chans <-chan NewChannel, reqs <-chan *Request) *Client {
+func NewClient(ctx context.Context, c Conn, chans <-chan NewChannel, reqs <-chan *Request, halt *Halter) *Client {
 	conn := &Client{
 		Conn:            c,
 		channelHandlers: make(map[string]chan NewChannel, 1),
-		Halt:            NewHalter(),
+		Halt:            halt,
 	}
 
 	go conn.handleGlobalRequests(ctx, reqs)
@@ -79,8 +79,11 @@ func NewClientConn(ctx context.Context, c net.Conn, addr string, config *ClientC
 		c.Close()
 		return nil, nil, nil, errors.New("ssh: must specify HostKeyCallback")
 	}
-
-	conn := newConnection(c)
+	if fullConf.Halt == nil {
+		c.Close()
+		return nil, nil, nil, errors.New("ssh: config must provide Halt")
+	}
+	conn := newConnection(c, fullConf.Halt)
 
 	// can block on conn here, we need to get a close
 	// on conn in.
@@ -148,7 +151,7 @@ func (c *Client) handleGlobalRequests(ctx context.Context, incoming <-chan *Requ
 				// the behaviour of OpenSSH.
 				r.Reply(false, nil)
 			}
-		case <-c.Halt.Done.Chan:
+		case <-c.Halt.ReqStop.Chan:
 			return
 		case <-c.Conn.Done():
 			return
@@ -163,7 +166,7 @@ func (c *Client) handleChannelOpens(ctx context.Context, in <-chan NewChannel) {
 
 	for {
 		select {
-		case <-c.Halt.Done.Chan:
+		case <-c.Halt.ReqStop.Chan:
 			return
 		case <-c.Conn.Done():
 			return
@@ -177,7 +180,7 @@ func (c *Client) handleChannelOpens(ctx context.Context, in <-chan NewChannel) {
 				if handler != nil {
 					select {
 					case handler <- ch:
-					case <-c.Halt.Done.Chan:
+					case <-c.Halt.ReqStop.Chan:
 						return
 					case <-c.Conn.Done():
 						return
@@ -212,7 +215,7 @@ func Dial(ctx context.Context, network, addr string, config *ClientConfig) (*Cli
 	if err != nil {
 		return nil, err
 	}
-	return NewClient(ctx, c, chans, reqs), nil
+	return NewClient(ctx, c, chans, reqs, config.Halt), nil
 }
 
 // HostKeyCallback is the function type used for verifying server

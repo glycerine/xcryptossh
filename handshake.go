@@ -115,7 +115,7 @@ func newHandshakeTransport(ctx context.Context, conn keyingTransport, config *Co
 	select {
 	case t.requestKex <- struct{}{}:
 		return t
-	case <-t.config.Halt.Done.Chan:
+	case <-t.config.Halt.ReqStop.Chan:
 		return nil
 	case <-ctx.Done():
 		return nil
@@ -140,6 +140,10 @@ func newClientTransport(ctx context.Context, conn keyingTransport, clientVersion
 func newServerTransport(ctx context.Context, conn keyingTransport, clientVersion, serverVersion []byte, config *ServerConfig) *handshakeTransport {
 
 	t := newHandshakeTransport(ctx, conn, &config.Config, clientVersion, serverVersion)
+	if t == nil {
+		// shutting down
+		return nil
+	}
 	t.hostKeys = config.hostKeys
 	go t.readLoop(ctx)
 	go t.kexLoop(ctx)
@@ -192,7 +196,7 @@ func (t *handshakeTransport) readPacket(ctx context.Context) ([]byte, error) {
 			return nil, t.readError
 		}
 		return p, nil
-	case <-t.config.Halt.Done.Chan:
+	case <-t.config.Halt.ReqStop.Chan:
 		return nil, io.EOF
 	case <-ctx.Done():
 		return nil, io.EOF
@@ -214,7 +218,7 @@ func (t *handshakeTransport) readLoop(ctx context.Context) {
 		}
 		select {
 		case t.incoming <- p:
-		case <-t.config.Halt.Done.Chan:
+		case <-t.config.Halt.ReqStop.Chan:
 			return
 		case <-ctx.Done():
 			return
@@ -286,7 +290,7 @@ write:
 				}
 			case <-t.requestKex:
 				break
-			case <-t.config.Halt.Done.Chan:
+			case <-t.config.Halt.ReqStop.Chan:
 				return
 			case <-ctx.Done():
 				return
@@ -305,7 +309,7 @@ write:
 			if request != nil {
 				select {
 				case request.done <- err:
-				case <-t.config.Halt.Done.Chan:
+				case <-t.config.Halt.ReqStop.Chan:
 					return
 				case <-ctx.Done():
 					return
@@ -341,7 +345,6 @@ write:
 		for {
 			select {
 			case <-t.requestKex:
-				//
 			default:
 				break clear
 			}
@@ -349,7 +352,7 @@ write:
 
 		select {
 		case request.done <- t.writeError:
-		case <-t.config.Halt.Done.Chan:
+		case <-t.config.Halt.ReqStop.Chan:
 			return
 		case <-ctx.Done():
 			return
@@ -373,21 +376,22 @@ write:
 	// drain startKex channel. We don't service t.requestKex
 	// because nobody does blocking sends there.
 	go func() {
+		defer func() {
+			t.config.Halt.Done.Close()
+		}()
 		for {
 			select {
 			case init := <-t.startKex:
 				if init != nil {
 					select {
 					case init.done <- t.writeError:
-					case <-t.config.Halt.Done.Chan:
+					case <-t.config.Halt.ReqStop.Chan:
 						return
 					case <-ctx.Done():
 						return
 					}
 				}
 			case <-t.config.Halt.ReqStop.Chan:
-				return
-			case <-t.config.Halt.Done.Chan:
 				return
 			case <-ctx.Done():
 				return
@@ -457,12 +461,12 @@ func (t *handshakeTransport) readOnePacket(ctx context.Context, first bool) ([]b
 	case t.startKex <- &kex:
 		select {
 		case err = <-kex.done:
-		case <-t.config.Halt.Done.Chan:
+		case <-t.config.Halt.ReqStop.Chan:
 			return nil, io.EOF
 		case <-ctx.Done():
 			return nil, io.EOF
 		}
-	case <-t.config.Halt.Done.Chan:
+	case <-t.config.Halt.ReqStop.Chan:
 		return nil, io.EOF
 	case <-ctx.Done():
 		return nil, io.EOF
