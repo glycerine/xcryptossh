@@ -74,3 +74,24 @@ Jason E. Aten, Ph.D.
 
 Licensed under the same BSD style license as the x/crypto/ssh code.
 See the LICENSE file.
+
+## current status
+
+As of 2017 Aug 26:
+
+All tests pass under -race. Some tests leak goroutines. There are
+two types of leaked goroutine, the kexLoop and the idleTimer.
+
+~~~
+goroutine 786 [runnable]:
+github.com/glycerine/sshego/xendor/github.com/glycerine/xcryptossh.(*handshakeTransport).kexLoop.func1(0xc4203aa160, 0x918ba0, 0xc420016120)
+	/home/jaten/inside/go/src/github.com/glycerine/sshego/xendor/github.com/glycerine/xcryptossh/handshake.go:391 +0x19a
+created by github.com/glycerine/sshego/xendor/github.com/glycerine/xcryptossh.(*handshakeTransport).kexLoop
+	/home/jaten/inside/go/src/github.com/glycerine/sshego/xendor/github.com/glycerine/xcryptossh/handshake.go:386 +0x982
+
+goroutine 787 [select, 8 minutes]:
+github.com/glycerine/sshego/xendor/github.com/glycerine/xcryptossh.(*idleTimer).backgroundStart.func1(0xc42098a000, 0xc4206c44b0)
+	/home/jaten/inside/go/src/github.com/glycerine/sshego/xendor/github.com/glycerine/xcryptossh/idle.go:156 +0x250
+created by github.com/glycerine/sshego/xendor/github.com/glycerine/xcryptossh.(*idleTimer).backgroundStart
+	/home/jaten/inside/go/src/github.com/glycerine/sshego/xendor/github.com/glycerine/xcryptossh/idle.go:142 +0x61
+~~~
