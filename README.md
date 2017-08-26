@@ -61,3 +61,12 @@ type Channel interface {
 ~~~
 
 See the tests in `timeout_test.go` for example use.
+
+## author
+
+Jason E. Aten, Ph.D.
+
+## license
+
+Licensed under the same BSD style license as the x/crypto/ssh code.
+See the LICENSE file.
