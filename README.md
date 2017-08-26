@@ -82,6 +82,10 @@ See the LICENSE file.
 
 ## current status
 
+All functionality is working, but I still consider it experimental until
+I've gotten more feedback and experience with it. Please try it out and
+give feedback.
+
 As of 2017 Aug 26:
 
 All tests pass under -race. Some tests leak goroutines. There are
