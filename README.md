@@ -44,6 +44,11 @@ type Channel interface {
 	// Providing dur of 0 will disable the idle timeout.
 	// Zero is the default until SetIdleTimeout() is called.
 	//
+	// SetIdleTimeout() will always reset and
+	// clear any raised timeout left over from prior use.
+	// Any new timer (if dur > 0) begins from the return of
+	// the SetIdleTimeout() invocation.
+        //
 	// Idle timeouts are easier to use than deadlines,
 	// as they don't need to be refreshed after
 	// every read and write. Hence routines like io.Copy()
