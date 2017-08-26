@@ -73,8 +73,6 @@ See the tests in `timeout_test.go` for example use.
 
 ## install
 
-Probably requires go1.9 or later. Not difficult to backport, but not on my priority list.
-
 ~~~
 $ go get -t -u -v github.com/glycerine/xcryptossh/...
 ~~~
