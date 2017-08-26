@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -83,42 +84,29 @@ type Channel interface {
 	// returned channel will be closed when the Channel is closed.
 	Done() <-chan struct{}
 
-	// for net.Conn compat:
-
-	// LocalAddr returns the local network address.
-	LocalAddr() net.Addr
-
-	// RemoteAddr returns the remote network address.
-	RemoteAddr() net.Addr
-
-	// SetDeadline sets the read and write deadlines associated
-	// with the connection. It is equivalent to calling both
-	// SetReadDeadline and SetWriteDeadline.
+	// SetIdleTimeout starts an idle timer on
+	// both Reads and Writes, that will cause them
+	// to timeout after dur if there is no successful
+	// Read() or Write() activity.
 	//
-	// A deadline is an absolute time after which I/O operations
-	// fail with a timeout (see type Error) instead of
-	// blocking. The deadline applies to all future and pending
-	// I/O, not just the immediately following call to Read or
-	// Write. After a deadline has been exceeded, the connection
-	// can be refreshed by setting a deadline in the future.
+	// Providing dur of 0 will disable the idle timeout.
+	// Zero is the default until SetIdleTimeout() is called.
 	//
-	// An idle timeout can be implemented by repeatedly extending
-	// the deadline after successful Read or Write calls.
+	// Idle timeouts are easier to use than deadlines,
+	// as they don't need to be refreshed after
+	// every read and write. Hence an io.Copy() routine
+	// that makes many calls to Read() and Write()
+	// can utilized while still having a timeout in
+	// the case of no activity.
 	//
-	// A zero value for t means I/O operations will not time out.
-	SetDeadline(t time.Time) error
-
-	// SetReadDeadline sets the deadline for future Read calls
-	// and any currently-blocked Read call.
-	// A zero value for t means Read will not time out.
-	SetReadDeadline(t time.Time) error
-
-	// SetWriteDeadline sets the deadline for future Write calls
-	// and any currently-blocked Write call.
-	// Even if write times out, it may return n > 0, indicating that
-	// some of the data was successfully written.
-	// A zero value for t means Write will not time out.
-	SetWriteDeadline(t time.Time) error
+	// Moreover idle timeouts are more
+	// efficient because we don't guess at a
+	// deadline and then interrupt a perfectly
+	// good ongoing copy that happens to be
+	// taking a few seconds longer than our
+	// guesstimate.
+	//
+	SetIdleTimeout(dur time.Duration) error
 }
 
 // Request is a request sent outside of the normal stream of
@@ -244,6 +232,24 @@ type channel struct {
 	// packetPool has a buffer for each extended channel ID to
 	// save allocations during writes.
 	packetPool map[uint32][]byte
+
+	// hasClosed makes Close() idempotent. Only
+	// the first invocation of Close() has any
+	// effect; the result return nil immediately.
+	hasClosed int32
+
+	// read and write deadlines
+	rline time.Time
+	wline time.Time
+
+	// idleTimer provides a means
+	// for ssh.Channel users to check how
+	// many nanoseconds have elapsed since the last
+	// error-free read/write. It is safe for
+	// use by multiple goroutines. Users
+	// should call SetIdleDur() and Reset() on it to before
+	// any subsequent calls to TimedOut().
+	idleTimer *idleTimer
 }
 
 // writePacket sends a packet. If the packet is a channel close, it updates
@@ -256,6 +262,9 @@ func (c *channel) writePacket(packet []byte) error {
 	}
 	c.sentClose = (packet[0] == msgChannelClose)
 	err := c.mux.conn.writePacket(packet)
+	if err != nil {
+		c.idleTimer.Reset()
+	}
 	c.writeMu.Unlock()
 	return err
 }
@@ -395,6 +404,9 @@ func (c *channel) ReadExtended(data []byte, extended uint32) (n int, err error) 
 	default:
 		return 0, fmt.Errorf("ssh: extended code %d unimplemented", extended)
 	}
+	if err != nil {
+		c.idleTimer.Reset()
+	}
 
 	if n > 0 {
 		err = c.adjustWindow(uint32(n))
@@ -422,6 +434,13 @@ func (c *channel) close() {
 	c.writeMu.Unlock()
 	// Unblock writers.
 	c.remoteWin.close()
+}
+
+func (c *channel) timeout() {
+	c.pending.timeout()
+	c.extPending.timeout()
+	// Unblock writers.
+	c.remoteWin.timeout()
 }
 
 // responseMessageReceived is called when a success or failure message is
@@ -518,11 +537,12 @@ func (c *channel) handlePacket(packet []byte) error {
 }
 
 func (m *mux) newChannel(chanType string, direction channelDirection, extraData []byte) *channel {
+	idle := &idleTimer{}
 	ch := &channel{
-		remoteWin:        window{Cond: newCond()},
+		remoteWin:        window{Cond: newCond(), idle: idle},
 		myWindow:         channelWindowSize,
-		pending:          newBuffer(),
-		extPending:       newBuffer(),
+		pending:          newBuffer(idle),
+		extPending:       newBuffer(idle),
 		direction:        direction,
 		incomingRequests: make(chan *Request, chanSize),
 		msg:              make(chan interface{}, chanSize),
@@ -530,6 +550,7 @@ func (m *mux) newChannel(chanType string, direction channelDirection, extraData 
 		extraData:        extraData,
 		mux:              m,
 		packetPool:       make(map[uint32][]byte),
+		idleTimer:        idle,
 	}
 	ch.localId = m.chanList.add(ch)
 	return ch
@@ -608,6 +629,11 @@ func (ch *channel) CloseWrite() error {
 }
 
 func (ch *channel) Close() error {
+	if !atomic.CompareAndSwapInt32(&ch.hasClosed, 0, 1) {
+		// idempotent Close
+		return nil
+	}
+
 	if !ch.decided {
 		return errUndecided
 	}
@@ -740,37 +766,11 @@ func (c *channel) RemoteAddr() net.Addr {
 	return &sshChanAddr
 }
 
-// SetDeadline sets the read and write deadlines associated
-// with the connection. It is equivalent to calling both
-// SetReadDeadline and SetWriteDeadline.
-//
-// A deadline is an absolute time after which I/O operations
-// fail with a timeout (see type Error) instead of
-// blocking. The deadline applies to all future and pending
-// I/O, not just the immediately following call to Read or
-// Write. After a deadline has been exceeded, the connection
-// can be refreshed by setting a deadline in the future.
-//
-// An idle timeout can be implemented by repeatedly extending
-// the deadline after successful Read or Write calls.
-//
-// A zero value for t means I/O operations will not time out.
-func (c *channel) SetDeadline(t time.Time) error {
-	return nil
-}
-
-// SetReadDeadline sets the deadline for future Read calls
-// and any currently-blocked Read call.
-// A zero value for t means Read will not time out.
-func (c *channel) SetReadDeadline(t time.Time) error {
-	return nil
-}
-
-// SetWriteDeadline sets the deadline for future Write calls
-// and any currently-blocked Write call.
-// Even if write times out, it may return n > 0, indicating that
-// some of the data was successfully written.
-// A zero value for t means Write will not time out.
-func (c *channel) SetWriteDeadline(t time.Time) error {
+// SetIdleTimeout establishes a new timeout duration
+// and starts the timing machinery off and running.
+// A dur of zero will disable timeouts.
+func (c *channel) SetIdleTimeout(dur time.Duration) error {
+	c.idleTimer.SetIdleTimeout(dur)
+	c.idleTimer.Reset()
 	return nil
 }

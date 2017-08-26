@@ -9,6 +9,23 @@ import (
 	"sync"
 )
 
+// ErrTimeout is a value that satisfies net.Error
+var ErrTimeout = errTimeout{}
+
+type errTimeout struct{}
+
+func (e errTimeout) Error() string {
+	return "timeout"
+}
+func (e errTimeout) Timeout() bool {
+	// Is the error a timeout?
+	return true
+}
+func (e errTimeout) Temporary() bool {
+	// Is the error temporary?
+	return true
+}
+
 // buffer provides a linked list buffer for data exchange
 // between producer and consumer. Theoretically the buffer is
 // of unlimited capacity as it does no allocation of its own.
@@ -19,7 +36,9 @@ type buffer struct {
 	head *element // the buffer that will be read first
 	tail *element // the buffer that will be read last
 
-	closed bool
+	closed   bool
+	timedOut bool
+	idle     *idleTimer
 }
 
 // An element represents a single link in a linked list.
@@ -29,12 +48,13 @@ type element struct {
 }
 
 // newBuffer returns an empty buffer that is not closed.
-func newBuffer() *buffer {
+func newBuffer(idle *idleTimer) *buffer {
 	e := new(element)
 	b := &buffer{
 		Cond: newCond(),
 		head: e,
 		tail: e,
+		idle: idle,
 	}
 	return b
 }
@@ -55,6 +75,18 @@ func (b *buffer) write(buf []byte) {
 func (b *buffer) eof() error {
 	b.Cond.L.Lock()
 	b.closed = true
+	b.Cond.Signal()
+	b.Cond.L.Unlock()
+	return nil
+}
+
+// timeout does not close the buffer. Reads from the buffer once all
+// the data has been consumed will receive ErrTimeout.
+// b.idle.TimeOut() must return true when queried for
+// this to be succesful.
+func (b *buffer) timeout() error {
+	b.Cond.L.Lock()
+	b.timedOut = true
 	b.Cond.Signal()
 	b.Cond.L.Unlock()
 	return nil
@@ -89,6 +121,11 @@ func (b *buffer) Read(buf []byte) (n int, err error) {
 		// check to see if the buffer is closed.
 		if b.closed {
 			err = io.EOF
+			break
+		}
+		if b.timedOut || b.idle.TimedOut() {
+			b.timedOut = false
+			err = ErrTimeout
 			break
 		}
 		// out of buffers, wait for producer
