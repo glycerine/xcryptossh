@@ -537,7 +537,7 @@ func (c *channel) handlePacket(packet []byte) error {
 }
 
 func (m *mux) newChannel(chanType string, direction channelDirection, extraData []byte) *channel {
-	idle := &idleTimer{}
+	idle := newIdleTimer(nil)
 	ch := &channel{
 		remoteWin:        window{Cond: newCond(), idle: idle},
 		myWindow:         channelWindowSize,
@@ -552,6 +552,7 @@ func (m *mux) newChannel(chanType string, direction channelDirection, extraData 
 		packetPool:       make(map[uint32][]byte),
 		idleTimer:        idle,
 	}
+	idle.setTimeoutCallback(ch.timeout)
 	ch.localId = m.chanList.add(ch)
 	return ch
 }
@@ -637,6 +638,8 @@ func (ch *channel) Close() error {
 	if !ch.decided {
 		return errUndecided
 	}
+
+	ch.idleTimer.halt.ReqStop.Close()
 
 	return ch.sendMessage(channelCloseMsg{
 		PeersId: ch.remoteId})
