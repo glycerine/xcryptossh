@@ -86,6 +86,10 @@ As of 2017 Aug 26:
 
 All tests pass under -race. Some tests leak goroutines. There are
 two types of leaked goroutine, the kexLoop and the idleTimer.
+The large number of existing tests means that I haven't had
+time to comb through all of them and make them behave properly.
+Since these leaks are when running tests only, its not
+a big issue.
 
 ~~~
 goroutine 786 [runnable]:
