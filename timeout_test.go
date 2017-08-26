@@ -49,7 +49,7 @@ func init() {
 // after every Read and Write. In contrast, when
 // using net.Conn deadlines, idle timeouts must
 // be done manually.
-//
+// repro: go test -v -timeout 60m -run Test[AS]
 
 func TestSimpleWriteTimeout(t *testing.T) {
 	r, w, mux := channelPair(t)
@@ -66,16 +66,16 @@ func TestSimpleWriteTimeout(t *testing.T) {
 			t.Fatalf("SetIdleTimeout: %v", err)
 		}
 		time.Sleep(2 * time.Millisecond)
-		_, err = w.Write([]byte(abandon))
+		n, err := w.Write([]byte(abandon))
 		if err == nil || !err.(net.Error).Timeout() {
-			panic(fmt.Sprintf("expected to get a net.Error that had Timeout() true: '%v'", err))
+			panic(fmt.Sprintf("expected to get a net.Error that had Timeout() true: '%v'. wrote n=%v", err, n))
 		}
 
 		err = w.SetIdleTimeout(0) // disable idle timeout
 		if err != nil {
 			t.Fatalf("canceling idle timeout: %v", err)
 		}
-		time.Sleep(2 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 		//fmt.Printf("\n\n SimpleTimeout: about to write which should succeed\n\n")
 		_, err = w.Write([]byte(magic))
 		if err != nil {
@@ -169,6 +169,12 @@ func TestSimpleReadAfterTimeout(t *testing.T) {
 	}
 	cancel <- true
 
+	// And we *must* reset the timeout status before trying to Read again.
+	err = r.SetIdleTimeout(0)
+	if err != nil {
+		t.Fatalf("reset with SetIdleTimeout: %v", err)
+	}
+
 	// now start a writer and verify that we can read okay
 	// even after a prior timeout.
 
@@ -182,7 +188,7 @@ func TestSimpleReadAfterTimeout(t *testing.T) {
 
 	n, err = r.Read(buf[:])
 	if err != nil {
-		t.Fatalf("Read after timed-out Read: %v", err)
+		t.Fatalf("Read after timed-out Read got err: %v", err)
 	}
 	if n != len(magic) {
 		t.Fatalf("short Read after timed-out Read")

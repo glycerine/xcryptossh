@@ -36,9 +36,8 @@ type buffer struct {
 	head *element // the buffer that will be read first
 	tail *element // the buffer that will be read last
 
-	closed   bool
-	timedOut bool
-	idle     *idleTimer
+	closed bool
+	idle   *idleTimer
 }
 
 // An element represents a single link in a linked list.
@@ -85,10 +84,7 @@ func (b *buffer) eof() error {
 // b.idle.TimeOut() must return true when queried for
 // this to be succesful.
 func (b *buffer) timeout() error {
-	b.Cond.L.Lock()
-	b.timedOut = true
 	b.Cond.Signal()
-	b.Cond.L.Unlock()
 	return nil
 }
 
@@ -123,8 +119,12 @@ func (b *buffer) Read(buf []byte) (n int, err error) {
 			err = io.EOF
 			break
 		}
-		if b.timedOut || b.idle.TimedOut() {
-			b.timedOut = false
+		timedOut := false
+		select {
+		case timedOut = <-b.idle.TimedOut:
+		case <-b.idle.halt.ReqStop.Chan:
+		}
+		if timedOut {
 			err = ErrTimeout
 			break
 		}
