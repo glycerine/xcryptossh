@@ -99,8 +99,7 @@ type mux struct {
 	errCond *sync.Cond
 	err     error
 
-	halt      *Halter
-	idleTimer *idleTimer
+	halt *Halter
 }
 
 // When debugging, each new chanList instantiation has a different
@@ -228,9 +227,6 @@ func (m *mux) onePacket(ctx context.Context) error {
 	packet, err := m.conn.readPacket(ctx)
 	if err != nil {
 		return err
-	}
-	if m.idleTimer != nil {
-		m.idleTimer.Reset()
 	}
 
 	if debugMux {

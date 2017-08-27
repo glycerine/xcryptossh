@@ -269,7 +269,7 @@ func (c *channel) writePacket(packet []byte) error {
 	}
 	c.sentClose = (packet[0] == msgChannelClose)
 	err := c.mux.conn.writePacket(packet)
-	if err != nil {
+	if err == nil {
 		c.idleTimer.Reset()
 	}
 	c.writeMu.Unlock()
@@ -289,6 +289,13 @@ func (c *channel) sendMessage(msg interface{}) error {
 // WriteExtended writes data to a specific extended stream. These streams are
 // used, for example, for stderr.
 func (c *channel) WriteExtended(data []byte, extendedCode uint32) (n int, err error) {
+	p("%p channel.WriteExtended called. c.idleTimer=%p", c, c.idleTimer)
+	defer func() {
+		p("%p channel.WriteExtended is returning was err='%v'. c.idleTimer=%p", c, err, c.idleTimer)
+		if err == nil {
+			c.idleTimer.Reset()
+		}
+	}()
 	if c.sentEOF {
 		return 0, io.EOF
 	}
@@ -312,6 +319,7 @@ func (c *channel) WriteExtended(data []byte, extendedCode uint32) (n int, err er
 		if space, err = c.remoteWin.reserve(space); err != nil {
 			return n, err
 		}
+		c.idleTimer.Reset()
 		if want := headerLength + space; uint32(cap(packet)) < want {
 			packet = make([]byte, want)
 		} else {
@@ -330,6 +338,7 @@ func (c *channel) WriteExtended(data []byte, extendedCode uint32) (n int, err er
 		if err = c.writePacket(packet); err != nil {
 			return n, err
 		}
+		c.idleTimer.Reset()
 
 		n += len(todo)
 		data = data[len(todo):]
@@ -411,7 +420,7 @@ func (c *channel) ReadExtended(data []byte, extended uint32) (n int, err error) 
 	default:
 		return 0, fmt.Errorf("ssh: extended code %d unimplemented", extended)
 	}
-	if err != nil {
+	if err == nil {
 		c.idleTimer.Reset()
 	}
 
@@ -466,6 +475,7 @@ func (c *channel) responseMessageReceived() error {
 }
 
 func (c *channel) handlePacket(packet []byte) error {
+	c.idleTimer.Reset()
 	switch packet[0] {
 	case msgChannelData, msgChannelExtendedData:
 		return c.handleData(packet)

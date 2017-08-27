@@ -5,17 +5,38 @@
 package ssh
 
 import (
+	"fmt"
 	"io"
+	"runtime"
 	"sync"
+	"time"
 )
 
 // ErrTimeout is a value that satisfies net.Error
-var ErrTimeout = errTimeout{}
+type errTimeout struct {
+	who   *idleTimer
+	when  time.Time
+	where []byte
+}
 
-type errTimeout struct{}
+func newErrTimeout(who *idleTimer) *errTimeout {
+	sz := 512
+	var stack []byte
+	for {
+		stack = make([]byte, sz)
+		nw := runtime.Stack(stack, false)
+		if nw >= sz {
+			sz = sz * 2
+		} else {
+			stack = stack[:nw]
+			break
+		}
+	}
+	return &errTimeout{who: who, when: time.Now(), where: stack}
+}
 
 func (e errTimeout) Error() string {
-	return "timeout"
+	return fmt.Sprintf("timeout from idleTimer %p, generated at '%v'. stack='\n%v\n'", e.who, e.when, string(e.where))
 }
 func (e errTimeout) Timeout() bool {
 	// Is the error a timeout?
@@ -92,7 +113,14 @@ func (b *buffer) timeout() error {
 // if no data is available, or until the buffer is closed.
 func (b *buffer) Read(buf []byte) (n int, err error) {
 	b.Cond.L.Lock()
-	defer b.Cond.L.Unlock()
+	defer func() {
+		b.Cond.L.Unlock()
+		if err == nil {
+			b.idle.Reset()
+		}
+	}()
+
+	//p("buffer.Read() on buf size %v", len(buf))
 
 	for len(buf) > 0 {
 		// if there is data in b.head, copy it
@@ -125,7 +153,7 @@ func (b *buffer) Read(buf []byte) (n int, err error) {
 		case <-b.idle.halt.ReqStop.Chan:
 		}
 		if timedOut {
-			err = ErrTimeout
+			err = newErrTimeout(b.idle)
 			break
 		}
 		// out of buffers, wait for producer

@@ -48,6 +48,8 @@ type callbacks struct {
 	onTimeout func()
 }
 
+var seen int
+
 // newIdleTimer creates a new idleTimer which will call
 // the `callback` function provided after `dur` inactivity.
 // If callback is nil, you must use setTimeoutCallback()
@@ -56,6 +58,11 @@ type callbacks struct {
 // timeout, in which case the timer will be inactive until
 // SetIdleTimeout is called.
 func newIdleTimer(callback func(), dur time.Duration) *idleTimer {
+	p("newIdleTimer called")
+	seen++
+	if seen == 3 {
+		//panic("where?")
+	}
 	t := &idleTimer{
 		getIdleTimeoutCh: make(chan time.Duration),
 		setIdleTimeoutCh: make(chan *setTimeoutTicket),
@@ -80,13 +87,20 @@ func (t *idleTimer) setTimeoutCallback(timeoutFunc func()) {
 // returned from an immediate next call to NanosecSince().
 //
 func (t *idleTimer) Reset() {
-	atomic.StoreUint64(&t.last, monoNow())
+	mnow := monoNow()
+	tlast := atomic.LoadUint64(&t.last)
+	p("8888888888    idleTimer.Reset() called on idleTimer=%p, at %v. storing mnow=%v  into t.last. elap=%v since last update", t, time.Now(), mnow, time.Duration(mnow-tlast))
+	atomic.StoreUint64(&t.last, mnow)
 }
 
 // NanosecSince returns how many nanoseconds it has
 // been since the last call to Reset().
 func (t *idleTimer) NanosecSince() uint64 {
-	return monoNow() - atomic.LoadUint64(&t.last)
+	mnow := monoNow()
+	tlast := atomic.LoadUint64(&t.last)
+	res := mnow - tlast
+	//p("idleTimer=%p, NanosecSince:  mnow=%v, t.last=%v, so mnow-t.last=%v\n\n", t, mnow, tlast, res)
+	return res
 }
 
 // SetIdleTimeout stores a new idle timeout duration. This
@@ -221,7 +235,12 @@ func (t *idleTimer) backgroundStart(dur time.Duration) {
 				if dur == 0 {
 					panic("should be impossible to get heartbeat.C on dur == 0")
 				}
-				if t.NanosecSince() > uint64(dur) {
+				since := t.NanosecSince()
+				udur := uint64(dur)
+				if since > udur {
+
+					//p("timing out at %v, in %p! since=%v  dur=%v, exceed=%v  \n\n", time.Now(), t, since, udur, since-udur)
+
 					/* change state */
 					t.timeOutRaised = true
 
