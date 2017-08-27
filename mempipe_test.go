@@ -40,21 +40,20 @@ func (t *memTransport) readPacket(ctx context.Context) ([]byte, error) {
 			return r, nil
 		}
 		if t.eof {
-			return nil, newErrEOF("t.eof")
+			return nil, io.EOF
 		}
 
 		if t.idle != nil {
 			select {
 			case timedOut := <-t.idle.TimedOut:
-				if timedOut {
-					return nil, newErrTimeout(t.idle)
+				if timedOut != "" {
+					return nil, newErrTimeout(timedOut, t.idle)
 				}
 			case <-t.idle.halt.ReqStop.Chan:
-				return nil, newErrEOF("<-t.idle.halt")
+				return nil, io.EOF
 			}
 		}
-		//p("memTransport has idle %p, about to wait", t.idle)
-		t.Cond.Wait() // deadlock hung here 15 minutes.
+		t.Cond.Wait()
 	}
 }
 
@@ -62,7 +61,7 @@ func (t *memTransport) closeSelf() error {
 	t.Lock()
 	defer t.Unlock()
 	if t.eof {
-		return newErrEOF("t.eof")
+		return io.EOF
 	}
 	t.eof = true
 	t.Cond.Broadcast()
@@ -79,7 +78,7 @@ func (t *memTransport) writePacket(p []byte) error {
 	t.write.Lock()
 	defer t.write.Unlock()
 	if t.write.eof {
-		return newErrEOF("t.write.eof")
+		return io.EOF
 	}
 	c := make([]byte, len(p))
 	copy(c, p)

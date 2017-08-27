@@ -265,7 +265,7 @@ func (c *channel) writePacket(packet []byte) error {
 	c.writeMu.Lock()
 	if c.sentClose {
 		c.writeMu.Unlock()
-		return newErrEOF("c.sentClose")
+		return io.EOF // TestClientWriteEOF depends on this being io.EOF
 	}
 	c.sentClose = (packet[0] == msgChannelClose)
 	err := c.mux.conn.writePacket(packet)
@@ -289,15 +289,15 @@ func (c *channel) sendMessage(msg interface{}) error {
 // WriteExtended writes data to a specific extended stream. These streams are
 // used, for example, for stderr.
 func (c *channel) WriteExtended(data []byte, extendedCode uint32) (n int, err error) {
-	p("%p channel.WriteExtended called. c.idleTimer=%p", c, c.idleTimer)
+	//p("%p channel.WriteExtended called. c.idleTimer=%p", c, c.idleTimer)
 	defer func() {
-		p("%p channel.WriteExtended is returning was err='%v'. c.idleTimer=%p", c, err, c.idleTimer)
+		//p("%p channel.WriteExtended is returning was err='%v'. c.idleTimer=%p", c, err, c.idleTimer)
 		if err == nil {
 			c.idleTimer.Reset()
 		}
 	}()
 	if c.sentEOF {
-		return 0, newErrEOF("c.sentEOF")
+		return 0, io.EOF
 	}
 	// 1 byte message type, 4 bytes remoteId, 4 bytes data length
 	opCode := byte(msgChannelData)
@@ -515,7 +515,7 @@ func (c *channel) handlePacket(packet []byte) error {
 		select {
 		case c.msg <- msg:
 		case <-reqStop:
-			return newErrEOF("<-reqStop")
+			return io.EOF
 		}
 	case *channelOpenConfirmMsg:
 		if err := c.responseMessageReceived(); err != nil {
@@ -530,7 +530,7 @@ func (c *channel) handlePacket(packet []byte) error {
 		select {
 		case c.msg <- msg:
 		case <-reqStop:
-			return newErrEOF("<-reqStop")
+			return io.EOF
 		}
 	case *windowAdjustMsg:
 		if !c.remoteWin.add(msg.AdditionalBytes) {
@@ -546,13 +546,13 @@ func (c *channel) handlePacket(packet []byte) error {
 		select {
 		case c.incomingRequests <- &req:
 		case <-reqStop:
-			return newErrEOF("<-reqStop")
+			return io.EOF
 		}
 	default:
 		select {
 		case c.msg <- msg:
 		case <-reqStop:
-			return newErrEOF("<-reqStop")
+			return io.EOF
 		}
 	}
 	return nil
@@ -661,7 +661,7 @@ func (ch *channel) Close() error {
 		return errUndecided
 	}
 
-	pp("channel %p Closing, halting idleTimer", ch)
+	p("channel %p Closing, halting idleTimer", ch)
 	ch.idleTimer.halt.ReqStop.Close()
 
 	return ch.sendMessage(channelCloseMsg{
@@ -716,10 +716,10 @@ func (ch *channel) SendRequest(name string, wantReply bool, payload []byte) (boo
 	if wantReply {
 		select {
 		case <-reqStop:
-			return false, newErrEOF("<-reqStop")
+			return false, io.EOF
 		case m, ok := (<-ch.msg):
 			if !ok {
-				return false, newErrEOF("<-ch.msg not ok")
+				return false, io.EOF
 			}
 			switch m.(type) {
 			case *channelRequestFailureMsg:

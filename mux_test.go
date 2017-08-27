@@ -53,6 +53,7 @@ func channelPair(t *testing.T) (*channel, *channel, *mux) {
 
 	chs := <-res
 
+	// setup the idleTimers on the memTransports.
 	tc := c.conn.(*memTransport)
 	tc.Lock()
 	tc.idle = chc.idleTimer
@@ -62,7 +63,6 @@ func channelPair(t *testing.T) (*channel, *channel, *mux) {
 	ts.Lock()
 	ts.idle = chs.idleTimer
 	ts.Unlock()
-	p("done mux_test setting up idle")
 
 	return chs, chc, c
 }
@@ -135,7 +135,7 @@ func TestMuxReadWrite(t *testing.T) {
 	var buf [1024]byte
 	n, err := c.Read(buf[:])
 	if err != nil {
-		t.Fatalf("server Read: %v", err)
+		t.Fatalf("server Read: %v", err) // eof:c.sentClose; channel.go:268 channel.writePacket()
 	}
 	got := string(buf[:n])
 	if got != magic {
@@ -144,7 +144,7 @@ func TestMuxReadWrite(t *testing.T) {
 
 	n, err = c.Extended(1).Read(buf[:])
 	if err != nil {
-		t.Fatalf("server Read: %v", err)
+		t.Fatalf("server Read: %v", err) // eof:c.sentClose
 	}
 
 	got = string(buf[:n])
@@ -374,7 +374,7 @@ func TestMuxGlobalRequestUnblock(t *testing.T) {
 	err := <-result
 
 	if err != io.EOF {
-		t.Errorf("want EOF, got %v", io.EOF)
+		t.Errorf("want EOF, got %v", err)
 	}
 }
 

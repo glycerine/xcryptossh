@@ -8,7 +8,9 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"sync"
 	"sync/atomic"
 )
@@ -162,7 +164,7 @@ func (m *mux) SendRequest(ctx context.Context, name string, wantReply bool, payl
 	select {
 	case msg, ok := <-m.globalResponses:
 		if !ok {
-			return false, nil, newErrEOF("!ok <-m.globalResponses")
+			return false, nil, io.EOF
 		}
 		switch msg := msg.(type) {
 		case *globalRequestFailureMsg:
@@ -174,9 +176,9 @@ func (m *mux) SendRequest(ctx context.Context, name string, wantReply bool, payl
 		}
 
 	case <-m.halt.ReqStop.Chan:
-		return false, nil, newErrEOF("<-m.halt")
+		return false, nil, io.EOF
 	case <-ctx.Done():
-		return false, nil, newErrEOF("<-ctx.Done")
+		return false, nil, io.EOF
 	}
 }
 
@@ -199,8 +201,18 @@ func (m *mux) loop(ctx context.Context) {
 	var err error
 	for err == nil {
 		err = m.onePacket(ctx)
-	}
 
+		// We can't have timeout errors here cause us to
+		// leave the loop and close down, because we need to be able to
+		// resume from a timeout where we left off.
+		if err != nil {
+			nerr, ok := err.(net.Error)
+			if ok && nerr.Timeout() {
+				err = nil
+			}
+		}
+	}
+	p("mux loop shutting down on err= '%v'", err) // t.eof
 	for _, ch := range m.chanList.dropAll() {
 		ch.close()
 	}
@@ -274,17 +286,17 @@ func (m *mux) handleGlobalPacket(ctx context.Context, packet []byte) error {
 		}:
 			// just the send
 		case <-m.halt.ReqStop.Chan:
-			return newErrEOF("<-m.halt")
+			return io.EOF
 		case <-ctx.Done():
-			return newErrEOF("<-ctx.Done")
+			return io.EOF
 		}
 	case *globalRequestSuccessMsg, *globalRequestFailureMsg:
 		select {
 		case m.globalResponses <- msg:
 		case <-m.halt.ReqStop.Chan:
-			return newErrEOF("<-m.halt")
+			return io.EOF
 		case <-ctx.Done():
-			return newErrEOF("<-ctx.Done")
+			return io.EOF
 		}
 	default:
 		panic(fmt.Sprintf("not a global message %#v", msg))
@@ -317,9 +329,9 @@ func (m *mux) handleChannelOpen(ctx context.Context, packet []byte) error {
 	select {
 	case m.incomingChannels <- c:
 	case <-m.halt.ReqStop.Chan:
-		return newErrEOF("<-m.halt")
+		return io.EOF
 	case <-ctx.Done():
-		return newErrEOF("<-ctx.Done")
+		return io.EOF
 	}
 	return nil
 }
@@ -365,8 +377,8 @@ func (m *mux) openChannel(ctx context.Context, chanType string, extra []byte) (*
 			return nil, fmt.Errorf("ssh: unexpected packet in response to channel open: %T", msgt)
 		}
 	case <-done:
-		return nil, newErrEOF("<-done")
+		return nil, io.EOF
 	case <-ctx.Done():
-		return nil, newErrEOF("<-ctx.Done")
+		return nil, io.EOF
 	}
 }

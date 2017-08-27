@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// ErrWhere is a value that satisfies net.Error
+// errWhere satisfies net.Error
 type errWhere struct {
 	msg   string
 	who   *idleTimer
@@ -21,26 +21,11 @@ type errWhere struct {
 	where []byte
 }
 
-func newErrTimeout(who *idleTimer) *errWhere {
-	return newErrWhere("timeout", who)
+func newErrTimeout(msg string, who *idleTimer) *errWhere {
+	return newErrWhere("timeout:"+msg, who)
 }
 
-func IsEOF(err error) bool {
-	if err == io.EOF {
-		return true
-	}
-	switch x := err.(type) {
-	case *errWhere:
-		return strings.HasPrefix(x.msg, "eof:")
-	}
-	return false
-}
-
-func newErrEOF(note string) *errWhere {
-	return newErrWhere("eof:"+note, nil)
-}
-
-func newErrWhere(msg string, who *idleTimer) *errWhere {
+func stacktrace() []byte {
 	sz := 512
 	var stack []byte
 	for {
@@ -53,7 +38,11 @@ func newErrWhere(msg string, who *idleTimer) *errWhere {
 			break
 		}
 	}
-	return &errWhere{msg: msg, who: who, when: time.Now(), where: stack}
+	return stack
+}
+
+func newErrWhere(msg string, who *idleTimer) *errWhere {
+	return &errWhere{msg: msg, who: who, when: time.Now(), where: stacktrace()}
 }
 
 func (e errWhere) Error() string {
@@ -62,8 +51,7 @@ func (e errWhere) Error() string {
 }
 
 func (e errWhere) Timeout() bool {
-	// Is the error a timeout?
-	return true
+	return strings.HasPrefix(e.msg, "timeout:")
 }
 
 func (e errWhere) Temporary() bool {
@@ -118,6 +106,7 @@ func (b *buffer) write(buf []byte) {
 // the data has been consumed will receive os.EOF.
 func (b *buffer) eof() error {
 	b.Cond.L.Lock()
+	//pp("buffer.eof is setting b.closed=true for b=%p. stack='%s'.", b, string(stacktrace()))
 	b.closed = true
 	b.Cond.Signal()
 	b.Cond.L.Unlock()
@@ -168,16 +157,16 @@ func (b *buffer) Read(buf []byte) (n int, err error) {
 		// if nothing was read, and there is nothing outstanding
 		// check to see if the buffer is closed.
 		if b.closed {
-			err = newErrEOF("closed")
+			err = io.EOF
 			break
 		}
-		timedOut := false
+		timedOut := ""
 		select {
 		case timedOut = <-b.idle.TimedOut:
 		case <-b.idle.halt.ReqStop.Chan:
 		}
-		if timedOut {
-			err = newErrTimeout(b.idle)
+		if timedOut != "" {
+			err = newErrTimeout(timedOut, b.idle)
 			break
 		}
 		// out of buffers, wait for producer
