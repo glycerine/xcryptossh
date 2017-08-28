@@ -22,7 +22,7 @@ import (
 type idleTimer struct {
 	mut     sync.Mutex
 	idleDur time.Duration
-	last    uint64
+	last    int64
 
 	halt            *Halter
 	timeoutCallback func()
@@ -38,6 +38,18 @@ type idleTimer struct {
 
 	setCallback   chan *callbacks
 	timeOutRaised string
+
+	// history of Reset() calls.
+	getHistoryCh chan *getHistoryTicket
+
+	// each of these, for instance,
+	// atomicdur is updated atomically, and should
+	// be read atomically. For use by Reset() and
+	// internal reporting only.
+	atomicdur  int64
+	overcount  int64
+	undercount int64
+	beginnano  int64 // not monotonic time source.
 }
 
 type callbacks struct {
@@ -63,6 +75,7 @@ func newIdleTimer(callback func(), dur time.Duration) *idleTimer {
 		getIdleTimeoutCh: make(chan time.Duration),
 		setIdleTimeoutCh: make(chan *setTimeoutTicket),
 		setCallback:      make(chan *callbacks),
+		getHistoryCh:     make(chan *getHistoryTicket),
 		TimedOut:         make(chan string),
 		halt:             NewHalter(),
 		timeoutCallback:  callback,
@@ -84,16 +97,47 @@ func (t *idleTimer) setTimeoutCallback(timeoutFunc func()) {
 //
 func (t *idleTimer) Reset() {
 	mnow := monoNow()
-	tlast := atomic.LoadUint64(&t.last)
-	q("idleTimer.Reset() called on idleTimer=%p, at %v. storing mnow=%v  into t.last. elap=%v since last update", t, time.Now(), mnow, time.Duration(mnow-tlast))
-	atomic.StoreUint64(&t.last, mnow)
+	now := time.Now()
+	// diagnose
+	atomic.CompareAndSwapInt64(&t.beginnano, 0, now.UnixNano())
+	tlast := atomic.LoadInt64(&t.last)
+	adur := atomic.LoadInt64(&t.atomicdur)
+	if adur > 0 {
+		diff := mnow - tlast
+		if diff > adur {
+			//p("idleTimer.Reset() warning! diff = %v is over adur %v", time.Duration(diff), time.Duration(adur))
+			atomic.AddInt64(&t.overcount, 1)
+		} else {
+			atomic.AddInt64(&t.undercount, 1)
+		}
+	}
+	//q("idleTimer.Reset() called on idleTimer=%p, at %v. storing mnow=%v  into t.last. elap=%v since last update", t, time.Now(), mnow, time.Duration(mnow-tlast))
+
+	// this is the only essential part of this routine. The above is for diagnosis.
+	atomic.StoreInt64(&t.last, mnow)
+}
+
+func (t *idleTimer) historyOfResets(dur time.Duration) string {
+	now := time.Now()
+	begin := atomic.LoadInt64(&t.beginnano)
+	if begin == 0 {
+		return ""
+	}
+	beginTm := time.Unix(0, begin)
+
+	mnow := monoNow()
+	last := atomic.LoadInt64(&t.last)
+	lastgap := time.Duration(mnow - last)
+	over := atomic.LoadInt64(&t.overcount)
+	under := atomic.LoadInt64(&t.undercount)
+	return fmt.Sprintf("history of idle Reset: # over dur:%v, # under dur:%v. lastgap: %v.  dur=%v  now: %v. begin: %v", over, under, lastgap, dur, now, beginTm)
 }
 
 // NanosecSince returns how many nanoseconds it has
 // been since the last call to Reset().
-func (t *idleTimer) NanosecSince() uint64 {
+func (t *idleTimer) NanosecSince() int64 {
 	mnow := monoNow()
-	tlast := atomic.LoadUint64(&t.last)
+	tlast := atomic.LoadInt64(&t.last)
 	res := mnow - tlast
 	//p("idleTimer=%p, NanosecSince:  mnow=%v, t.last=%v, so mnow-t.last=%v\n\n", t, mnow, tlast, res)
 	return res
@@ -118,6 +162,19 @@ func (t *idleTimer) SetIdleTimeout(dur time.Duration) {
 	case <-t.halt.ReqStop.Chan:
 	}
 
+}
+
+func (t *idleTimer) GetResetHistory() string {
+	tk := newGetHistoryTicket()
+	select {
+	case t.getHistoryCh <- tk:
+	case <-t.halt.ReqStop.Chan:
+	}
+	select {
+	case <-tk.done:
+	case <-t.halt.ReqStop.Chan:
+	}
+	return tk.hist
 }
 
 // GetIdleTimeout returns the current idle timeout duration in use.
@@ -152,12 +209,33 @@ func newSetTimeoutTicket(dur time.Duration) *setTimeoutTicket {
 	}
 }
 
+type getHistoryTicket struct {
+	hist string
+	done chan struct{}
+}
+
+func newGetHistoryTicket() *getHistoryTicket {
+	return &getHistoryTicket{
+		done: make(chan struct{}),
+	}
+}
+
+const factor = 10
+
 func (t *idleTimer) backgroundStart(dur time.Duration) {
+	atomic.StoreInt64(&t.atomicdur, int64(dur))
 	go func() {
 		var heartbeat *time.Ticker
 		var heartch <-chan time.Time
 		if dur > 0 {
-			heartbeat = time.NewTicker(dur)
+			// we've got to sample at above niquist
+			// in order to have a chance of responding
+			// quickly to timeouts of dur length. Theoretically
+			// dur/2 suffices, but sooner is better so
+			// we go with dur/factor. This also allows for
+			// some play/some slop in the sampling, which
+			// we empirically observe.
+			heartbeat = time.NewTicker(dur / factor)
 			heartch = heartbeat.C
 		}
 		defer func() {
@@ -196,6 +274,8 @@ func (t *idleTimer) backgroundStart(dur time.Duration) {
 							heartbeat.Stop() // allow GC
 						}
 						dur = tk.newdur
+						atomic.StoreInt64(&t.atomicdur, int64(dur))
+
 						heartbeat = nil
 						heartch = nil
 						close(tk.done)
@@ -206,7 +286,9 @@ func (t *idleTimer) backgroundStart(dur time.Duration) {
 						heartbeat.Stop() // allow GC
 					}
 					dur = tk.newdur
-					heartbeat = time.NewTicker(dur)
+					atomic.StoreInt64(&t.atomicdur, int64(dur))
+
+					heartbeat = time.NewTicker(dur / factor)
 					heartch = heartbeat.C
 					t.Reset()
 					close(tk.done)
@@ -215,32 +297,40 @@ func (t *idleTimer) backgroundStart(dur time.Duration) {
 					// heartbeats not currently active
 					if tk.newdur <= 0 {
 						dur = 0
+						atomic.StoreInt64(&t.atomicdur, int64(dur))
+
 						// staying inactive
 						close(tk.done)
 						continue
 					}
 					// heartbeats activating
 					dur = tk.newdur
-					heartbeat = time.NewTicker(dur)
+					atomic.StoreInt64(&t.atomicdur, int64(dur))
+
+					heartbeat = time.NewTicker(dur / factor)
 					heartch = heartbeat.C
 					t.Reset()
 					close(tk.done)
 					continue
 				}
 
+			case tk := <-t.getHistoryCh:
+				tk.hist = t.historyOfResets(dur)
+				close(tk.done)
+
 			case <-heartch:
 				if dur == 0 {
 					panic("should be impossible to get heartbeat.C on dur == 0")
 				}
 				since := t.NanosecSince()
-				udur := uint64(dur)
+				udur := int64(dur)
 				if since > udur {
 					//p("timing out at %v, in %p! since=%v  dur=%v, exceed=%v  \n\n", time.Now(), t, since, udur, since-udur)
 
 					/* change state */
 					t.timeOutRaised = fmt.Sprintf("timing out dur='%v' at %v, in %p! "+
-						"since=%v  dur=%v, exceed=%v.",
-						dur, time.Now(), t, since, udur, since-udur)
+						"since=%v  dur=%v, exceed=%v. historyOfResets='%s'",
+						dur, time.Now(), t, since, udur, since-udur, t.historyOfResets(dur))
 
 					// After firing, disable until reactivated.
 					// Still must be a ticker and not a one-shot because it may take
