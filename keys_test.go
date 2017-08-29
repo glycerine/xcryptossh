@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/glycerine/sshego/xendor/github.com/glycerine/xcryptossh/testdata"
+	"github.com/glycerine/xcryptossh/testdata"
 	"golang.org/x/crypto/ed25519"
 )
 

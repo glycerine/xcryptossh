@@ -18,7 +18,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/glycerine/sshego/xendor/github.com/glycerine/xcryptossh/terminal"
+	"github.com/glycerine/xcryptossh/terminal"
 )
 
 type serverType func(Channel, <-chan *Request, *testing.T)
