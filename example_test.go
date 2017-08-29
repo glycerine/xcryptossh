@@ -17,11 +17,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/glycerine/xcryptossh"
-	"github.com/glycerine/xcryptossh/terminal"
+	"github.com/glycerine/sshego/xendor/github.com/glycerine/xcryptossh"
+	"github.com/glycerine/sshego/xendor/github.com/glycerine/xcryptossh/terminal"
 )
 
 func ExampleNewServerConn() {
+
 	// Public key authentication is done by comparing
 	// the public key of a received connection
 	// with the entries in the authorized_keys file.

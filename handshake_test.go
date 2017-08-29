@@ -110,7 +110,7 @@ func handshakePair(clientConf *ClientConfig, addr string, noise bool) (client *h
 
 	client = newClientTransport(ctx, trC, v, v, clientConf, addr, a.RemoteAddr())
 
-	serverConf := &ServerConfig{}
+	serverConf := &ServerConfig{Config: Config{Halt: clientConf.Halt}}
 	serverConf.AddHostKey(testSigners["ecdsa"])
 	serverConf.AddHostKey(testSigners["rsa"])
 	serverConf.SetDefaults()
@@ -129,6 +129,8 @@ func handshakePair(clientConf *ClientConfig, addr string, noise bool) (client *h
 }
 
 func TestHandshakeBasic(t *testing.T) {
+	defer xtestend(xtestbegin())
+
 	if runtime.GOOS == "plan9" {
 		t.Skip("see golang.org/issue/7237")
 	}
@@ -138,8 +140,16 @@ func TestHandshakeBasic(t *testing.T) {
 		called:   make(chan int, 10),
 	}
 
+	halt := NewHalter()
+	defer halt.ReqStop.Close()
 	checker.waitCall <- 1
-	trC, trS, err := handshakePair(&ClientConfig{HostKeyCallback: checker.Check}, "addr", false)
+	trC, trS, err := handshakePair(
+		&ClientConfig{
+			HostKeyCallback: checker.Check,
+			Config: Config{
+				Halt: halt},
+		}, "addr", false)
+
 	if err != nil {
 		t.Fatalf("handshakePair: %v", err)
 	}
@@ -222,9 +232,19 @@ func TestHandshakeBasic(t *testing.T) {
 }
 
 func TestForceFirstKex(t *testing.T) {
+	defer xtestend(xtestbegin())
+
+	halt := NewHalter()
+	defer halt.ReqStop.Close()
+
 	// like handshakePair, but must access the keyingTransport.
 	checker := &testChecker{}
-	clientConf := &ClientConfig{HostKeyCallback: checker.Check}
+	clientConf := &ClientConfig{
+		HostKeyCallback: checker.Check,
+		Config: Config{
+			Halt: halt,
+		},
+	}
 	a, b, err := netPipe()
 	if err != nil {
 		t.Fatalf("netPipe: %v", err)
@@ -245,7 +265,7 @@ func TestForceFirstKex(t *testing.T) {
 	ctx := context.Background()
 	client := newClientTransport(ctx, trC, v, v, clientConf, "addr", a.RemoteAddr())
 
-	serverConf := &ServerConfig{}
+	serverConf := &ServerConfig{Config: Config{Halt: halt}}
 	serverConf.AddHostKey(testSigners["ecdsa"])
 	serverConf.AddHostKey(testSigners["rsa"])
 	serverConf.SetDefaults()
@@ -268,11 +288,18 @@ func TestForceFirstKex(t *testing.T) {
 }
 
 func TestHandshakeAutoRekeyWrite(t *testing.T) {
+	defer xtestend(xtestbegin())
+
+	halt := NewHalter()
+	defer halt.ReqStop.Close()
 	checker := &syncChecker{
 		called:   make(chan int, 10),
 		waitCall: nil,
 	}
-	clientConf := &ClientConfig{HostKeyCallback: checker.Check}
+	clientConf := &ClientConfig{
+		HostKeyCallback: checker.Check,
+		Config:          Config{Halt: halt},
+	}
 	clientConf.RekeyThreshold = 500
 	trC, trS, err := handshakePair(clientConf, "addr", false)
 	if err != nil {
@@ -334,12 +361,18 @@ func (c *syncChecker) Check(dialAddr string, addr net.Addr, key PublicKey) error
 }
 
 func TestHandshakeAutoRekeyRead(t *testing.T) {
+	defer xtestend(xtestbegin())
+
+	halt := NewHalter()
+	defer halt.ReqStop.Close()
+
 	sync := &syncChecker{
 		called:   make(chan int, 2),
 		waitCall: nil,
 	}
 	clientConf := &ClientConfig{
 		HostKeyCallback: sync.Check,
+		Config:          Config{Halt: halt},
 	}
 	clientConf.RekeyThreshold = 500
 
@@ -410,24 +443,32 @@ func (n *errorKeyingTransport) readPacket(ctx context.Context) ([]byte, error) {
 }
 
 func TestHandshakeErrorHandlingRead(t *testing.T) {
+	defer xtestend(xtestbegin())
+
 	for i := 0; i < 20; i++ {
 		testHandshakeErrorHandlingN(t, i, -1, false)
 	}
 }
 
 func TestHandshakeErrorHandlingWrite(t *testing.T) {
+	defer xtestend(xtestbegin())
+
 	for i := 0; i < 20; i++ {
 		testHandshakeErrorHandlingN(t, -1, i, false)
 	}
 }
 
 func TestHandshakeErrorHandlingReadCoupled(t *testing.T) {
+	defer xtestend(xtestbegin())
+
 	for i := 0; i < 20; i++ {
 		testHandshakeErrorHandlingN(t, i, -1, true)
 	}
 }
 
 func TestHandshakeErrorHandlingWriteCoupled(t *testing.T) {
+	defer xtestend(xtestbegin())
+
 	for i := 0; i < 20; i++ {
 		testHandshakeErrorHandlingN(t, -1, i, true)
 	}
@@ -508,11 +549,20 @@ func testHandshakeErrorHandlingN(t *testing.T, readLimit, writeLimit int, couple
 }
 
 func TestDisconnect(t *testing.T) {
+	defer xtestend(xtestbegin())
+
+	halt := NewHalter()
+	defer halt.ReqStop.Close()
+
 	if runtime.GOOS == "plan9" {
 		t.Skip("see golang.org/issue/7237")
 	}
 	checker := &testChecker{}
-	trC, trS, err := handshakePair(&ClientConfig{HostKeyCallback: checker.Check}, "addr", false)
+	trC, trS, err := handshakePair(
+		&ClientConfig{
+			HostKeyCallback: checker.Check,
+			Config:          Config{Halt: halt},
+		}, "addr", false)
 	if err != nil {
 		t.Fatalf("handshakePair: %v", err)
 	}
@@ -550,9 +600,15 @@ func TestDisconnect(t *testing.T) {
 }
 
 func TestHandshakeRekeyDefault(t *testing.T) {
+	defer xtestend(xtestbegin())
+
+	halt := NewHalter()
+	defer halt.ReqStop.Close()
+
 	clientConf := &ClientConfig{
 		Config: Config{
 			Ciphers: []string{"aes128-ctr"},
+			Halt:    halt,
 		},
 		HostKeyCallback: InsecureIgnoreHostKey(),
 	}

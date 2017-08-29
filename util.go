@@ -8,30 +8,66 @@ import (
 	"time"
 )
 
-// utilities and error types
+// utilities, error types, and debugging machinery.
+
+// xtestLeakCheckOn controls leak checking.
+//
+// change this to true to check for goroutine leaks
+// in the tests. Turn to off (false) when not in
+// use because it slows down each test by
+// 1 second to let the final goroutine
+// count stabilize after the test.
+const xtestLeakCheckOn = false
 
 // errWhere satisfies net.Error
 type errWhere struct {
 	msg   string
 	who   *idleTimer
 	when  time.Time
-	where []byte
+	where string
 }
 
 func newErrTimeout(msg string, who *idleTimer) *errWhere {
 	return newErrWhere("timeout:"+msg, who)
 }
 
-var curtest string
-
 var regexTestname = regexp.MustCompile(`Test[^\s\(]+`)
 
-func setcurtest() {
-	curtest = testname()
+type xtraTestState struct {
+	name                  string
+	numStartingGoroutines int
+}
+
+// Testbegin example:
+//
+// At the top of each test put this line:
+//
+//    defer xtestend(xtestbegin())
+//
+func xtestbegin() *xtraTestState {
+	if xtestLeakCheckOn {
+		ct := testname()
+		return &xtraTestState{
+			name: ct,
+			numStartingGoroutines: runtime.NumGoroutine(),
+		}
+	}
+	return nil
+}
+
+func xtestend(x *xtraTestState) {
+	if xtestLeakCheckOn {
+		time.Sleep(time.Second)
+		endCount := runtime.NumGoroutine()
+		if endCount != x.numStartingGoroutines {
+			panic(fmt.Sprintf("test leaks goroutines: '%s': ended with %v >= started with %v",
+				x.name, endCount, x.numStartingGoroutines))
+		}
+	}
 }
 
 func testname() string {
-	s := string(stacktrace())
+	s := stacktrace()
 	slc := regexTestname.FindAllString(s, -1)
 	n := len(slc)
 	if n == 0 {
@@ -40,7 +76,7 @@ func testname() string {
 	return slc[n-1]
 }
 
-func stacktrace() []byte {
+func stacktrace() string {
 	sz := 512
 	var stack []byte
 	for {
@@ -53,7 +89,7 @@ func stacktrace() []byte {
 			break
 		}
 	}
-	return stack
+	return string(stack)
 }
 
 func newErrWhere(msg string, who *idleTimer) *errWhere {
