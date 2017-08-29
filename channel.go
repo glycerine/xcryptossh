@@ -458,6 +458,7 @@ func (c *channel) close() {
 }
 
 func (c *channel) timeout() {
+	p("channel timeout() invoked, for channel %p", c)
 	c.pending.timeout()
 	c.extPending.timeout()
 	// Unblock writers.
@@ -578,7 +579,7 @@ func (m *mux) newChannel(chanType string, direction channelDirection, extraData 
 		packetPool:       make(map[uint32][]byte),
 		idleTimer:        idle,
 	}
-	idle.setTimeoutCallback(ch.timeout)
+	idle.addTimeoutCallback(ch.timeout)
 	ch.localId = m.chanList.add(ch)
 	return ch
 }

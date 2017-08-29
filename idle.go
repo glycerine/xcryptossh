@@ -25,7 +25,7 @@ type idleTimer struct {
 	last    int64
 
 	halt            *Halter
-	timeoutCallback func()
+	timeoutCallback []func()
 
 	// GetIdleTimeoutCh returns the current idle timeout duration in use.
 	// It will return 0 if timeouts are disabled.
@@ -37,6 +37,7 @@ type idleTimer struct {
 	TimedOut         chan string // sends empty string if no timeout, else details.
 
 	setCallback   chan *callbacks
+	addCallback   chan *callbacks
 	timeOutRaised string
 
 	// history of Reset() calls.
@@ -75,18 +76,37 @@ func newIdleTimer(callback func(), dur time.Duration) *idleTimer {
 		getIdleTimeoutCh: make(chan time.Duration),
 		setIdleTimeoutCh: make(chan *setTimeoutTicket),
 		setCallback:      make(chan *callbacks),
+		addCallback:      make(chan *callbacks),
 		getHistoryCh:     make(chan *getHistoryTicket),
 		TimedOut:         make(chan string),
 		halt:             NewHalter(),
-		timeoutCallback:  callback,
+	}
+	if callback != nil {
+		t.timeoutCallback = append(t.timeoutCallback, callback)
 	}
 	go t.backgroundStart(dur)
 	return t
 }
 
+// typically prefer addTimeoutCallback instead; using
+// this will blow away any other callbacks that are
+// already registered. Unless that is what you want,
+// use addTimeoutCallback().
+//
 func (t *idleTimer) setTimeoutCallback(timeoutFunc func()) {
 	select {
 	case t.setCallback <- &callbacks{onTimeout: timeoutFunc}:
+	case <-t.halt.ReqStop.Chan:
+	}
+}
+
+// add without removing exiting callbacks
+func (t *idleTimer) addTimeoutCallback(timeoutFunc func()) {
+	if timeoutFunc == nil {
+		panic("cannot call addTimeoutCallback with nil function!")
+	}
+	select {
+	case t.addCallback <- &callbacks{onTimeout: timeoutFunc}:
 	case <-t.halt.ReqStop.Chan:
 	}
 }
@@ -95,7 +115,7 @@ func (t *idleTimer) setTimeoutCallback(timeoutFunc func()) {
 // internally, effectively reseting to zero the value
 // returned from an immediate next call to NanosecSince().
 //
-func (t *idleTimer) Reset() {
+func (t *idleTimer) Reset() (err error) {
 	mnow := monoNow()
 	now := time.Now()
 	// diagnose
@@ -105,8 +125,9 @@ func (t *idleTimer) Reset() {
 	if adur > 0 {
 		diff := mnow - tlast
 		if diff > adur {
-			//p("idleTimer.Reset() warning! diff = %v is over adur %v", time.Duration(diff), time.Duration(adur))
+			p("idleTimer.Reset() warning! diff = %v is over adur %v", time.Duration(diff), time.Duration(adur))
 			atomic.AddInt64(&t.overcount, 1)
+			err = newErrTimeout(fmt.Sprintf("Reset() diff %v > %v adur", diff, adur), t)
 		} else {
 			atomic.AddInt64(&t.undercount, 1)
 		}
@@ -115,6 +136,7 @@ func (t *idleTimer) Reset() {
 
 	// this is the only essential part of this routine. The above is for diagnosis.
 	atomic.StoreInt64(&t.last, mnow)
+	return
 }
 
 func (t *idleTimer) historyOfResets(dur time.Duration) string {
@@ -253,7 +275,10 @@ func (t *idleTimer) backgroundStart(dur time.Duration) {
 				continue
 
 			case f := <-t.setCallback:
-				t.timeoutCallback = f.onTimeout
+				t.timeoutCallback = []func(){f.onTimeout}
+
+			case f := <-t.addCallback:
+				t.timeoutCallback = append(t.timeoutCallback, f.onTimeout)
 
 			case t.getIdleTimeoutCh <- dur:
 				continue
@@ -325,7 +350,7 @@ func (t *idleTimer) backgroundStart(dur time.Duration) {
 				since := t.NanosecSince()
 				udur := int64(dur)
 				if since > udur {
-					//p("timing out at %v, in %p! since=%v  dur=%v, exceed=%v  \n\n", time.Now(), t, since, udur, since-udur)
+					p("timing out at %v, in %p! since=%v  dur=%v, exceed=%v. waking %v callbacks", time.Now(), t, since, udur, since-udur, len(t.timeoutCallback))
 
 					/* change state */
 					t.timeOutRaised = fmt.Sprintf("timing out dur='%v' at %v, in %p! "+
@@ -341,14 +366,16 @@ func (t *idleTimer) backgroundStart(dur time.Duration) {
 					}
 					heartbeat = nil
 					heartch = nil
-					if t.timeoutCallback == nil {
-						panic("idleTimer.timeoutCallback was never set! call t.setTimeoutCallback()!!!")
+					if len(t.timeoutCallback) == 0 {
+						panic("idleTimer.timeoutCallback was never set! call t.addTimeoutCallback() first")
 					}
 					// our caller may be holding locks...
 					// and timeoutCallback will want locks...
 					// so unless we start timeoutCallback() on its
 					// own goroutine, we are likely to deadlock.
-					go t.timeoutCallback()
+					for _, f := range t.timeoutCallback {
+						go f()
+					}
 				}
 			}
 		}
