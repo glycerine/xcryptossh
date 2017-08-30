@@ -98,4 +98,11 @@ Excellent. Tested on OSX and Linux.
 
 All tests pass under -race. The tests no longer leak goroutines.
 
+## branch with write deadline failing test
+
+I experimented with write deadlines, but could not get them
+to work. It appears that SSH will happily Write() to an
+ssh.Channel and return nil error, even if there is
+never any corresponding Read() on the other end. See the
+branch `write_deadlines`.
 
