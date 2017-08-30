@@ -112,3 +112,4 @@ In particular, run the TestSimpleWriteDeadline test in `timeout_test.go`, e.g.
 $ go test -v -timeout 120m -race -run WriteDeadline`
 ~~~
 
+Read deadlines, via both SetIdleTimeout() and SetReadDeadline() on a Channel, are available.
