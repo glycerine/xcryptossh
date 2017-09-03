@@ -313,7 +313,7 @@ type window struct {
 	win          uint32 // RFC 4254 5.2 says the window size can grow to 2^32-1
 	writeWaiters int
 	closed       bool
-	idle         *idleTimer
+	idle         *IdleTimer
 }
 
 // add adds win to the amount of window available
@@ -358,7 +358,7 @@ func (w *window) reserveShouldReturn() (bye bool, err error) {
 		if timedOut != "" {
 			return true, newErrTimeout(timedOut, w.idle)
 		}
-	case <-w.idle.halt.ReqStop.Chan:
+	case <-w.idle.Halt.ReqStop.Chan:
 		// original tests expect io.EOF and not ErrShutDown,
 		// so we continue with an EOF here, even though
 		// we are shutting down.
