@@ -133,7 +133,7 @@ func setClose(r, w Channel, closeReader bool) {
 
 func testCts(timeOutOnReader bool, t *testing.T) {
 	halt := NewHalter()
-	defer halt.ReqStop.Close()
+	defer halt.RequestStop()
 
 	r, w, mux := channelPair(t, halt)
 
@@ -148,8 +148,8 @@ func testCts(timeOutOnReader bool, t *testing.T) {
 
 	haltr := NewHalter()
 	haltw := NewHalter()
-	defer haltr.ReqStop.Close()
-	defer haltw.ReqStop.Close()
+	defer haltr.RequestStop()
+	defer haltw.RequestStop()
 
 	setTo(r, w, timeOutOnReader, idleout)
 	readErr := make(chan error)
@@ -173,12 +173,12 @@ func testCts(timeOutOnReader bool, t *testing.T) {
 collectionLoop:
 	for {
 		select {
-		case <-haltr.Done.Chan:
+		case <-haltr.DoneChan():
 			haltrDone = true
 			if complete() {
 				break collectionLoop
 			}
-		case <-haltw.Done.Chan:
+		case <-haltw.DoneChan():
 			haltwDone = true
 			if complete() {
 				break collectionLoop
@@ -201,8 +201,8 @@ collectionLoop:
 			// Closing is faster than setting a timeout and waiting for it.
 			setClose(r, w, !timeOutOnReader)
 
-			haltr.ReqStop.Close()
-			haltw.ReqStop.Close()
+			haltr.RequestStop()
+			haltw.RequestStop()
 
 			if complete() {
 				break collectionLoop
@@ -257,7 +257,7 @@ func readerToRing(idleout time.Duration, r Channel, halt *Halter, overall time.D
 	defer func() {
 		p("readerToRing returning on readErr, err = '%v'", err)
 		readErr <- err
-		halt.Done.Close()
+		halt.MarkDone()
 	}()
 
 	ring := newInfiniteRing()
@@ -282,7 +282,7 @@ func readerToRing(idleout time.Duration, r Channel, halt *Halter, overall time.D
 			}
 			numwrites++
 			select {
-			case <-halt.ReqStop.Chan:
+			case <-halt.ReqStopChan():
 				return readOk
 			default:
 			}
@@ -305,7 +305,7 @@ func seqWordsToWriter(w Channel, halt *Halter, tstop time.Time, writeErr chan er
 	defer func() {
 		//p("seqWordsToWriter returning err = '%v'", err)
 		writeErr <- err
-		halt.Done.Close()
+		halt.MarkDone()
 	}()
 	src := newSequentialWords()
 	*pSeqWords = src
@@ -325,7 +325,7 @@ func seqWordsToWriter(w Channel, halt *Halter, tstop time.Time, writeErr chan er
 				break
 			}
 			select {
-			case <-halt.ReqStop.Chan:
+			case <-halt.ReqStopChan():
 				return writeOk
 			default:
 			}
