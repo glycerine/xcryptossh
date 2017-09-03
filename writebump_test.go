@@ -33,7 +33,7 @@ func TestTimeout009ReadsIdleOutEvenIfWritesOK(t *testing.T) {
 	tExpectIdleOut := t0.Add(idleout)
 
 	// set the timeout on the reader
-	err := r.SetIdleTimeout(idleout)
+	err := r.SetReadIdleTimeout(idleout)
 	if err != nil {
 		panic(fmt.Sprintf("r.SetIdleTimeout: %v", err))
 	}
@@ -56,7 +56,6 @@ collectionLoop:
 	for {
 		select {
 		case <-time.After(2 * overall):
-			pp("reset history: %v", r.GetResetHistory())
 			panic(fmt.Sprintf("TestTimeout009WriteIdlesOutWhenReadsStop: waited " +
 				"two overall, yet still no idle timeout!"))
 

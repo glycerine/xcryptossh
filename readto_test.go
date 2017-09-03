@@ -28,7 +28,7 @@ func TestTimeout008ReadIdlesOutWhenWriteStops(t *testing.T) {
 	tstop := t0.Add(overall)
 
 	// set the timeout on the reader
-	err := r.SetIdleTimeout(idleout)
+	err := r.SetReadIdleTimeout(idleout)
 	if err != nil {
 		panic(fmt.Sprintf("r.SetIdleTimeout: %v", err))
 	}
@@ -63,7 +63,6 @@ collectionLoop:
 				continue
 			}
 
-			pp("reset history: %v", r.GetResetHistory())
 			panic(fmt.Sprintf("TestTimeout008ReadIdlesOutWhenWriteStops deadlocked: went past 3x overall"))
 
 		case rerr = <-readErr:
@@ -104,7 +103,6 @@ collectionLoop:
 
 	// sanity check that whenLastReadTimedout in when we expect
 	if whenLastReadTimedout.Before(tstop) {
-		pp("reset history: %v", r.GetResetHistory())
 		panic("premature timeout, very bad")
 	}
 

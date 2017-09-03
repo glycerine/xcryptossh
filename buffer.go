@@ -20,7 +20,7 @@ type buffer struct {
 	tail *element // the buffer that will be read last
 
 	closed bool
-	idle   *idleTimer
+	idle   *IdleTimer
 }
 
 // An element represents a single link in a linked list.
@@ -30,7 +30,7 @@ type element struct {
 }
 
 // newBuffer returns an empty buffer that is not closed.
-func newBuffer(idle *idleTimer) *buffer {
+func newBuffer(idle *IdleTimer) *buffer {
 	e := new(element)
 	b := &buffer{
 		Cond: newCond(),
@@ -74,11 +74,12 @@ func (b *buffer) timeout() error {
 // Read reads data from the internal buffer in buf.  Reads will block
 // if no data is available, or until the buffer is closed.
 func (b *buffer) Read(buf []byte) (n int, err error) {
+	b.idle.BeginAttempt()
 	b.Cond.L.Lock()
 	defer func() {
 		b.Cond.L.Unlock()
 		if err == nil {
-			b.idle.Reset(true)
+			b.idle.AttemptOK()
 		}
 	}()
 
@@ -110,7 +111,7 @@ func (b *buffer) Read(buf []byte) (n int, err error) {
 		timedOut := ""
 		select {
 		case timedOut = <-b.idle.TimedOut:
-		case <-b.idle.halt.ReqStop.Chan:
+		case <-b.idle.Halt.ReqStop.Chan:
 		}
 		if timedOut != "" {
 			err = newErrTimeout(timedOut, b.idle)
