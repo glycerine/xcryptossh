@@ -118,6 +118,7 @@ func (m *mux) Wait() error {
 
 // newMux returns a mux that runs over the given connection.
 func newMux(ctx context.Context, p packetConn, halt *Halter) *mux {
+	// idle is nil on server
 	m := &mux{
 		conn:             p,
 		incomingChannels: make(chan NewChannel, chanSize),
@@ -143,6 +144,10 @@ func (m *mux) sendMessage(msg interface{}) error {
 	return m.conn.writePacket(p)
 }
 
+// SendRequest sends a global request, and returns the
+// reply. This is the ssh.Conn implimentation, described
+// in connection.go. If wantReply is true, it returns the
+// response status and payload. See also RFC4254, section 4.
 func (m *mux) SendRequest(ctx context.Context, name string, wantReply bool, payload []byte) (bool, []byte, error) {
 	if wantReply {
 		m.globalSentMu.Lock()

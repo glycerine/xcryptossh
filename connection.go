@@ -110,6 +110,9 @@ type connection struct {
 	// the Config used
 	cfg *Config
 
+	// for client connections, provides the User, HostPort
+	clicfg *ClientConfig
+
 	// clean shutdown mechanism
 	halt *Halter
 
@@ -117,15 +120,20 @@ type connection struct {
 	*mux
 }
 
-func newConnection(c net.Conn, cfg *Config) *connection {
+func newConnection(nc net.Conn, cfg *Config, clicfg *ClientConfig) *connection {
+	// clicfg will be nil for server side.
+
 	if cfg.Halt == nil {
 		panic("assert: cfg.Halt cannot be nil in newConnection()")
 	}
-	return &connection{
-		sshConn: sshConn{conn: c},
+	conn := &connection{
+		sshConn: sshConn{conn: nc},
 		halt:    cfg.Halt,
 		cfg:     cfg,
+		clicfg:  clicfg,
 	}
+
+	return conn
 }
 
 func (c *connection) Close() error {

@@ -83,7 +83,7 @@ func NewClientConn(ctx context.Context, c net.Conn, addr string, config *ClientC
 		c.Close()
 		return nil, nil, nil, errors.New("ssh: config must provide Halt")
 	}
-	conn := newConnection(c, &fullConf.Config)
+	conn := newConnection(c, &fullConf.Config, &fullConf)
 
 	// can block on conn here, we need to get a close
 	// on conn in.
@@ -91,6 +91,7 @@ func NewClientConn(ctx context.Context, c net.Conn, addr string, config *ClientC
 		c.Close()
 		return nil, nil, nil, fmt.Errorf("ssh: handshake failed: %v", err)
 	}
+
 	conn.mux = newMux(ctx, conn.transport, conn.halt)
 	return conn, conn.mux.incomingChannels, conn.mux.incomingRequests, nil
 }
@@ -237,6 +238,9 @@ type ClientConfig struct {
 
 	// User contains the username to authenticate as.
 	User string
+
+	// HostPort has the IP:port in string form.
+	HostPort string
 
 	// Auth contains possible authentication methods to use with the
 	// server. Only the first instance of a particular RFC 4252 method will
