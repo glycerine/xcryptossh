@@ -219,7 +219,8 @@ func Dial(ctx context.Context, network, addr string, config *ClientConfig) (*Cli
 	if err != nil {
 		return nil, err
 	}
-	return NewClient(ctx, c, chans, reqs, config.Halt), nil
+	// use the clicfg.Halt because config.Halt might still be nil.
+	return NewClient(ctx, c, chans, reqs, c.(*connection).clicfg.Halt), nil
 }
 
 // HostKeyCallback is the function type used for verifying server
